@@ -1,0 +1,6 @@
+{
+  "editor.inlineSuggest.showToolbar": "always",
+  "rust-analyzer.linkedProjects": [
+    "./Cargo.toml"
+  ]
+}
