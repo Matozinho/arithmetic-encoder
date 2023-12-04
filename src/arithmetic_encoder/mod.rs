@@ -1,15 +1,14 @@
 use std::{
   collections::HashMap,
   fs::File,
-  io::{BufReader, Read, Result, Seek, SeekFrom},
+  io::{BufReader, Read, Result, Seek, SeekFrom, Write},
   path::PathBuf,
 };
-
-const PRECISION: f64 = 10000.0;
 
 pub struct ArithmeticEncoder {
   lower_bound: u32,
   upper_bound: u32,
+  precision: f64,
 }
 
 impl ArithmeticEncoder {
@@ -17,6 +16,7 @@ impl ArithmeticEncoder {
     ArithmeticEncoder {
       lower_bound,
       upper_bound,
+      precision: 10f64.powi((upper_bound.ilog10() as i32).max(0)) * 10.0,
     }
   }
 
@@ -28,6 +28,10 @@ impl ArithmeticEncoder {
       .unwrap()
       .to_digit(10)
       .unwrap()
+  }
+
+  fn trunc_in_precision(&self, number: f64) -> f64 {
+    (number * self.precision).trunc() / self.precision
   }
 
   fn calculate_probabilities(&self, reader: &mut BufReader<File>) -> Result<Vec<(u8, f64)>> {
@@ -45,7 +49,12 @@ impl ArithmeticEncoder {
     // Convert frequencies to probabilities and store them in a vector
     let mut probabilities: Vec<(u8, f64)> = frequency_map
       .into_iter()
-      .map(|(byte, count)| (byte, count as f64 / total_bytes as f64))
+      .map(|(byte, count)| {
+        (
+          byte,
+          self.trunc_in_precision(count as f64 / total_bytes as f64),
+        )
+      })
       .collect();
 
     // Sort the vector in descending order by probability
@@ -59,17 +68,28 @@ impl ArithmeticEncoder {
     sorted_probabilities: &Vec<(u8, f64)>,
     reader: &mut BufReader<File>,
   ) -> Result<u32> {
+    let mut output = File::create("output.txt")?;
     // Compute cumulative probabilities
-    let mut cumulative_probabilities = HashMap::new();
+    let mut cumulative_probabilities: Vec<(u8, f64)> = Vec::new();
     let mut cumulative = 0.0;
 
     for (byte, probability) in sorted_probabilities.into_iter() {
       cumulative += probability;
-      cumulative_probabilities.insert(byte, cumulative);
+      cumulative_probabilities.push((*byte, cumulative));
     }
 
-    let mut low = self.lower_bound;
-    let mut high = self.upper_bound;
+    println!("====================");
+    for (byte, probability) in cumulative_probabilities.clone() {
+      println!(
+        "Byte: {:?}, Probability: {:.2}%",
+        byte as char,
+        probability * 100.0
+      );
+    }
+    println!("====================");
+
+    let mut low = self.lower_bound as f64;
+    let mut high = self.upper_bound as f64;
     // let mut range;
 
     reader.seek(SeekFrom::Start(0))?;
@@ -79,40 +99,48 @@ impl ArithmeticEncoder {
     for byte_result in reader.bytes() {
       // find the byte in the cumulative probabilities
       let byte = byte_result?;
-      let byte_high_prob = (cumulative_probabilities.get(&byte).unwrap() * PRECISION.trunc()) as u32;
-      let byte_low_prob = 0u32;
+      let (index, (_, byte_high_prob)) = cumulative_probabilities
+        .iter()
+        .enumerate()
+        .find(|&(_, (b, _))| b == &byte)
+        .unwrap();
 
-      println!(
-        "Byte: {:?}, Low: {}, High: {}",
-        byte as char, byte_low_prob, byte_high_prob
-      );
+      let byte_low_prob = if index == 0 {
+        0.0
+      } else {
+        cumulative_probabilities[index - 1].1
+      };
 
-      // let most_significant_hight = ArithmeticEncoder::first_digit(byte_high);
-      // let most_significant_low = ArithmeticEncoder::first_digit(byte_low);
+      let range = high - low + 1.0;
+      let mut new_low: f64 = low + range * byte_low_prob;
+      let mut new_high: f64 = low + range * (*byte_high_prob) - 1.0;
 
-      // println!(
-      //   "hight: {} - MSH: {} | low: {} - MSL: {}",
-      //   byte_high, most_significant_hight, byte_low, most_significant_low
-      // );
+      let most_significant_high: u32 = ArithmeticEncoder::first_digit(new_high as u32);
+      let most_significant_low: u32 = ArithmeticEncoder::first_digit(new_low as u32);
 
-      // if most_significant_hight == most_significant_low {
-      //   // shift the most significant digit out
-      //   high = (high << 1) & 0xFFFF_FFFF;
-      //   low = (low << 1) & 0xFFFF_FFFF;
-      // } else {
-      // let new_hight = low + (high - low + 1) * byte_high - 1;
-      // let new_low = low + (high - low + 1) * byte_low;
-      // }
+      if most_significant_high == most_significant_low {
+        println!("SHIFTING -> LOW: {} | HIGH: {}", new_low, new_high);
 
-      // low = new_low;
-      // high = new_hight;
+        // Calculate the power of 10 to remove the most significant digit
+        let power_of_10 = 10f64.powi((new_high.log10() as i32).max(0));
 
-      println!("Low: {}, High: {}", low, high);
+        // Remove the most significant digit
+        new_high = (new_high - most_significant_high as f64 * power_of_10) * 10.0;
+        new_low = (new_low - most_significant_low as f64 * power_of_10) * 10.0;
+
+        // write the most significant digit as a string to the output
+        output.write_all(most_significant_high.to_string().as_bytes())?;
+      }
+
+      low = new_low.round();
+      high = new_high.round();
+
+      println!("Char: {}: Low: {}, High: {}", byte as char, low, high);
     }
     println!("====================");
 
     // Return the midpoint of the final range as the result
-    Ok((low + (high - low) / 2) as u32)
+    Ok((low + (high - low) / 2.0) as u32)
   }
 
   pub fn encode(&self, filename: PathBuf) -> () {
