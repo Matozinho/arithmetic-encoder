@@ -1,3 +1,5 @@
+use std::process::Output;
+
 use arithmetic_encoder::ArithmeticEncoder;
 
 use crate::cli::Cli;
@@ -14,15 +16,16 @@ fn main() {
   let filename = cli.filename;
   let operation: cli::Operation = cli.operation;
 
-  let encode_max = cli.encode_max;
-  let encode_min = cli.encode_min;
+  let lower_bound = cli.lower_bound;
+  let upper_bound = cli.upper_bound;
+  let output_filename = cli.output;
 
-  let encoder = ArithmeticEncoder::new(encode_min, encode_max);
+  let encoder = ArithmeticEncoder::new(lower_bound, upper_bound);
 
   match operation {
     cli::Operation::Encode => {
       // print the maximum value of u32
-      encoder.encode(filename)
+      encoder.encode(filename, output_filename).unwrap()
     }
     cli::Operation::Decode => encoder.decode(filename),
   }

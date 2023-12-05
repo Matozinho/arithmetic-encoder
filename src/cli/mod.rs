@@ -15,13 +15,17 @@ pub struct Cli {
   #[arg(short, long, default_value_t = Operation::Encode)]
   pub operation: Operation,
 
-  /// the minimum value to encode
-  #[arg(long, default_value_t = 0)]
-  pub encode_min: u32,
+  /// the minimum value to encode. Only used when encoding
+  #[arg(short, long, default_value_t = 0)]
+  pub lower_bound: u32,
 
-  /// the maximum value to encode
-  #[arg(long, default_value_t = u32::MAX)]
-  pub encode_max: u32,
+  /// the maximum value to encode. Only used when encoding
+  #[arg(short, long, default_value_t = u32::MAX)]
+  pub upper_bound: u32,
+
+  /// the name of the output file
+  #[arg(long, default_value = "output")]
+  pub output: PathBuf,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
