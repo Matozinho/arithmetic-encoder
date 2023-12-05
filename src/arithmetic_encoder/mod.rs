@@ -6,12 +6,12 @@ use std::{
   path::PathBuf,
 };
 
-const BUFFERING_SIZE: u16 = 10;
+const _BUFFERING_SIZE: u16 = 10;
 
 pub struct ArithmeticEncoder {
   lower_bound: u32,
   upper_bound: u32,
-  _precision: f64,
+  probabilities: Vec<(u8, f64)>,
 }
 
 impl ArithmeticEncoder {
@@ -19,50 +19,11 @@ impl ArithmeticEncoder {
     ArithmeticEncoder {
       lower_bound,
       upper_bound,
-      _precision: 10f64.powi((upper_bound.ilog10() as i32).max(0)) * 10.0,
+      probabilities: Vec::new(),
     }
   }
 
-  fn first_digit(number: u32) -> u8 {
-    number
-      .to_string()
-      .chars()
-      .next()
-      .unwrap()
-      .to_digit(10)
-      .unwrap() as u8
-  }
-
-  fn calculate_probabilities(&self, reader: &mut BufReader<File>) -> Result<Vec<(u8, f64)>> {
-    reader.seek(SeekFrom::Start(0))?;
-    let mut frequency_map: HashMap<u8, u64> = HashMap::new();
-    let mut total_bytes = 0u64;
-
-    // Read the file byte by byte
-    for byte in reader.bytes() {
-      let byte = byte?;
-      *frequency_map.entry(byte).or_insert(0) += 1;
-      total_bytes += 1;
-    }
-
-    // Convert frequencies to probabilities and store them in a vector
-    let mut probabilities: Vec<(u8, f64)> = frequency_map
-      .into_iter()
-      .map(|(byte, count)| (byte, count as f64 / total_bytes as f64))
-      .collect();
-
-    // Sort the vector in descending order by probability. if probabilities are equal, sort by byte value
-    probabilities.sort_by(|a, b| {
-      b.1
-        .partial_cmp(&a.1)
-        .unwrap_or(Equal)
-        .then_with(|| a.0.cmp(&b.0))
-    });
-
-    Ok(probabilities)
-  }
-
-  fn remove_trailing_zeros(&self, number: u32) -> u32 {
+  fn _remove_trailing_zeros(&self, number: u32) -> u32 {
     let binding = number.to_string();
     let trimmed_str = binding.trim_end_matches('0');
     if trimmed_str.is_empty() {
@@ -73,7 +34,7 @@ impl ArithmeticEncoder {
     }
   }
 
-  fn get_minimal_integer(&self, mut number: u32) -> Vec<u8> {
+  fn _get_minimal_integer(&self, mut number: u32) -> Vec<u8> {
     let mut bytes = Vec::new();
     while number != 0 {
       bytes.push((number & 0xFF) as u8); // Extract the lowest 8 bits
@@ -86,25 +47,56 @@ impl ArithmeticEncoder {
     bytes
   }
 
+
+  fn first_digit(number: u32) -> u8 {
+    number
+      .to_string()
+      .chars()
+      .next()
+      .unwrap()
+      .to_digit(10)
+      .unwrap() as u8
+  }
+
+  fn calculate_probabilities(&mut self, reader: &mut BufReader<File>) -> Result<()> {
+    reader.seek(SeekFrom::Start(0))?;
+    let mut frequency_map: HashMap<u8, u64> = HashMap::new();
+    let mut total_bytes = 0u64;
+
+    // Read the file byte by byte
+    for byte in reader.bytes() {
+      let byte = byte?;
+      *frequency_map.entry(byte).or_insert(0) += 1;
+      total_bytes += 1;
+    }
+
+    // Convert frequencies to probabilities and store them in a vector
+    self.probabilities = frequency_map
+      .into_iter()
+      .map(|(byte, count)| (byte, count as f64 / total_bytes as f64))
+      .collect();
+
+    // Sort the vector in descending order by probability. if probabilities are equal, sort by byte value
+    self.probabilities.sort_by(|a, b| {
+      b.1
+        .partial_cmp(&a.1)
+        .unwrap_or(Equal)
+        .then_with(|| a.0.cmp(&b.0))
+    });
+
+    Ok(())
+  }
   // TODO: Find a way to do a buffer to write to the file
-  // TODO: store the memory of the last in the output file (???)
-  // TODO: store the propabilities into the output file
   fn encode_process(
     &self,
     sorted_probabilities: &Vec<(u8, f64)>,
     reader: &mut BufReader<File>,
-    output_path: PathBuf,
+    mut output_file: File,
   ) -> Result<()> {
     let mut output_vec: Vec<u8> = Vec::new();
-    let mut output = File::create(output_path.with_extension("ac"))?;
-    // Compute cumulative probabilities
-    let mut cumulative_probabilities: Vec<(u8, f64)> = Vec::new();
-    let mut cumulative = 0.0;
 
-    for (byte, probability) in sorted_probabilities.into_iter() {
-      cumulative += probability;
-      cumulative_probabilities.push((*byte, cumulative));
-    }
+    // Compute cumulative probabilities
+    let cumulative_probabilities = sorted_probabilities.compute_cumulative_probabilities();
 
     println!("====================");
     for (byte, probability) in cumulative_probabilities.clone() {
@@ -121,16 +113,11 @@ impl ArithmeticEncoder {
     // let mut range;
 
     reader.seek(SeekFrom::Start(0))?;
-    // Read the file byte by byte
+    
     for byte_result in reader.bytes() {
-      // find the byte in the cumulative probabilities
       let byte = byte_result?;
-      let (index, &(_, byte_high_prob)) = cumulative_probabilities
-        .iter()
-        .enumerate()
-        .find(|&(_, (b, _))| b == &byte)
-        .unwrap();
 
+      let (index, byte_high_prob) = cumulative_probabilities.find_byte_data(byte);
       let byte_low_prob = if index == 0 {
         0.0
       } else {
@@ -162,31 +149,47 @@ impl ArithmeticEncoder {
 
         // write the most significant digit as a string to the output
         output_vec.push(most_significant_high);
-        output.write_all(&[most_significant_high])?;
+        output_file.write_all(&[most_significant_high])?;
       }
 
       low = new_low;
       high = new_high;
     }
 
-    let mut bytes = self.get_minimal_integer(self.remove_trailing_zeros(low));
-
-    output.write_all(&bytes)?;
-    output_vec.append(&mut bytes);
+    // WARNING: not sure about this (store as le or be)
+    output_file.write_all(&low.to_le_bytes())?;
+    output_vec.append(&mut low.to_le_bytes().to_vec());
 
     println!("{:?}", output_vec);
 
     Ok(())
   }
 
-  pub fn encode(&self, filename: PathBuf, output_filename: PathBuf) -> Result<()> {
+  fn encode_header(&self, probabilities: &Vec<(u8, f64)>, mut output_file: File) -> Result<()> {
+    // write the lower and upper bounds to the output file
+    output_file.write_all(&self.lower_bound.to_le_bytes())?;
+    output_file.write_all(&self.upper_bound.to_le_bytes())?;
+
+    // write the number of entries at the probabilities table
+    output_file.write_all(&(probabilities.len() as u32).to_le_bytes())?;
+
+    // write the probabilities to the output file
+    for (byte, probability) in probabilities.clone() {
+      output_file.write_all(&[byte])?;
+      output_file.write_all(&probability.to_le_bytes())?;
+    }
+
+    Ok(())
+  }
+
+  pub fn encode(&mut self, filename: PathBuf, output_filename: PathBuf) -> Result<()> {
     // Open the file as a binary file
     let file = File::open(&filename).unwrap();
-
+    let output_file = File::create(&output_filename.with_extension("ac")).unwrap();
     let mut reader = BufReader::new(file);
+    self.calculate_probabilities(&mut reader).unwrap();
 
-    let probabilities = self.calculate_probabilities(&mut reader).unwrap();
-    for (byte, probability) in probabilities.clone() {
+    for (byte, probability) in self.probabilities.clone() {
       println!(
         "Byte: {:?}, Probability: {:.2}%",
         byte as char,
@@ -194,29 +197,93 @@ impl ArithmeticEncoder {
       );
     }
 
-    self.encode_process(&probabilities, &mut reader, output_filename)?;
+    self.encode_header(&self.probabilities, output_file.try_clone()?)?;
+
+    self.encode_process(&self.probabilities, &mut reader, output_file)?;
     Ok(())
   }
 
-  pub fn decode(&self, _filename: PathBuf) -> () {
-    unimplemented!()
+  fn decode_header(&mut self, mut input_file: File) -> Result<()> {
+    // read the lower and upper bounds from the input file
+    let mut lower_bound_bytes = [0u8; 4];
+    let mut upper_bound_bytes = [0u8; 4];
+    input_file.read_exact(&mut lower_bound_bytes)?;
+    input_file.read_exact(&mut upper_bound_bytes)?;
+
+    self.lower_bound = u32::from_le_bytes(lower_bound_bytes);
+    self.upper_bound = u32::from_le_bytes(upper_bound_bytes);
+
+    // read the number of entries at the probabilities table
+    let mut number_of_entries_bytes = [0u8; 4];
+    input_file.read_exact(&mut number_of_entries_bytes)?;
+    let number_of_entries = u32::from_le_bytes(number_of_entries_bytes);
+
+    // read the probabilities from the input file
+    for _ in 0..number_of_entries {
+      let mut byte = [0u8; 1];
+      let mut probability_bytes = [0u8; 8];
+      input_file.read_exact(&mut byte)?;
+      input_file.read_exact(&mut probability_bytes)?;
+      let probability = f64::from_le_bytes(probability_bytes);
+      self.probabilities.push((byte[0], probability));
+    }
+
+    Ok(())
+  }
+
+  pub fn decode(&mut self, filename: PathBuf) -> Result<()> {
+    let input_file = File::open(&filename).unwrap();
+    self.decode_header(input_file.try_clone()?)?;
+
+    println!("====================");
+    println!(
+      "Lower bound: {} | Upper bound: {}",
+      self.lower_bound, self.upper_bound
+    );
+    for (byte, probability) in self.probabilities.clone() {
+      println!(
+        "Byte: {:?}, Probability: {:.2}%",
+        byte as char,
+        probability * 100.0
+      );
+    }
+    println!("====================");
+
+    let mut input_file_reader = BufReader::new(input_file.try_clone()?);
+    let mut bytes: Vec<u8> = Vec::new();
+    input_file_reader.read_to_end(&mut bytes)?;
+
+    println!("{:?}", bytes);
+
+    Ok(())
   }
 }
 
-trait ProbabilityExt {
-  fn cumulative(&self) -> f64;
-  fn lower_bound(&self) -> f64;
+// TODO: implement it for the current data
+trait ProbabilityOperations {
+  fn compute_cumulative_probabilities(&self) -> Vec<(u8, f64)>;
+  fn find_byte_data(&self, byte: u8) -> (usize, f64);
 }
 
-impl ProbabilityExt for HashMap<u8, f64> {
-  fn cumulative(&self) -> f64 {
-    self.values().sum()
+impl ProbabilityOperations for Vec<(u8, f64)> {
+  fn compute_cumulative_probabilities(&self) -> Vec<(u8, f64)> {
+    let mut cumulative_probabilities = Vec::new();
+    let mut cumulative = 0.0;
+
+    for &(byte, probability) in self.iter() {
+      cumulative += probability;
+      cumulative_probabilities.push((byte, cumulative));
+    }
+
+    cumulative_probabilities
   }
 
-  fn lower_bound(&self) -> f64 {
-    *self
-      .values()
-      .min_by(|a, b| a.partial_cmp(b).unwrap())
-      .unwrap_or(&0.0)
+  fn find_byte_data(&self, byte: u8) -> (usize, f64) {
+    self
+      .iter()
+      .enumerate()
+      .find(|&(_, (b, _))| *b == byte)
+      .map(|(index, &(_, prob))| (index, prob))
+      .unwrap()
   }
 }
