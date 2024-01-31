@@ -47,7 +47,6 @@ impl ArithmeticEncoder {
     bytes
   }
 
-
   fn first_digit(number: u32) -> u8 {
     number
       .to_string()
@@ -113,7 +112,7 @@ impl ArithmeticEncoder {
     // let mut range;
 
     reader.seek(SeekFrom::Start(0))?;
-    
+
     for byte_result in reader.bytes() {
       let byte = byte_result?;
 
@@ -126,7 +125,7 @@ impl ArithmeticEncoder {
 
       let range = (high - low) as f64 + 1.0;
       let prob_in_range_high = (range * byte_high_prob).trunc() as u32;
-      let prob_in_range_low = (range * byte_low_prob).trunc() as u32 as u32;
+      let prob_in_range_low = (range * byte_low_prob).trunc() as u32;
 
       let mut new_low = low + prob_in_range_low;
       let mut new_high = low + prob_in_range_high - 1;
@@ -231,9 +230,37 @@ impl ArithmeticEncoder {
     Ok(())
   }
 
+  // pub fn decode(&self, encoded_filename: PathBuf, output_filename: PathBuf) -> Result<()> {
+  //   let encoded_file = File::open(&encoded_filename)?;
+  //   let mut reader = BufReader::new(encoded_file);
+  //   let mut output_file = File::create(&output_filename)?;
+
+  //   // Read the header information (lower_bound, upper_bound, probabilities)
+  //   self.decode_header(encoded_file.try_clone()?)?;
+
+  //   // Initialize decoding variables
+  //   let mut current_range = (self.lower_bound as f64, self.upper_bound as f64);
+
+  //   // Read the encoded data and reconstruct the original data
+  //   while let Some(encoded_value) = self.read_next_encoded_value(&mut reader) {
+  //     let byte = self.find_corresponding_byte(encoded_value, &probabilities, &mut current_range);
+  //     output_file.write_all(&[byte])?;
+  //   }
+
+  //   Ok(())
+  // }
+
   pub fn decode(&mut self, filename: PathBuf) -> Result<()> {
-    let input_file = File::open(&filename).unwrap();
+    let mut input_file = File::open(&filename).unwrap();
     self.decode_header(input_file.try_clone()?)?;
+
+    // read the last 4 bytes from the file in u32
+    let mut last_bytes = [0u8; 4];
+    input_file.seek(SeekFrom::End(-4))?;
+    input_file.read_exact(&mut last_bytes)?;
+    let last_low = u32::from_le_bytes(last_bytes);
+
+    println!("Last bytes: {}", last_low);
 
     println!("====================");
     println!(
@@ -250,10 +277,16 @@ impl ArithmeticEncoder {
     println!("====================");
 
     let mut input_file_reader = BufReader::new(input_file.try_clone()?);
-    let mut bytes: Vec<u8> = Vec::new();
-    input_file_reader.read_to_end(&mut bytes)?;
+    // place the cursor at the end of the probabilities table
+    input_file_reader.seek(SeekFrom::Start(12 + self.probabilities.len() as u64 * 9))?;
 
-    println!("{:?}", bytes);
+    // read the byte by byte from the file
+    for byte in input_file_reader.bytes() {
+      let byte = byte?;
+      let range = (self.upper_bound - self.lower_bound) as f64 + 1.0;
+      let calc = self.lower_bound as f64 + (byte as f64 / u32::MAX as f64) * range;
+      println!("Byte: {}: {}", byte, calc);
+    }
 
     Ok(())
   }
